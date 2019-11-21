@@ -5,10 +5,9 @@
 extern "C" {
 #endif
 
-#include <stdlib.h>
-#include <curl/curl.h>
-
-# define INFLUXDB_URL_MAX_SIZE 4096
+#define INFLUXDB_URL_MAX_LEN 4096
+#define WITHOUT_LOGIN 0
+#define WITH_LOGIN 1
 
 #define influxdb_assign_string(dst,src) \
     dst=malloc(sizeof(char)*(strlen(src)+1));\
@@ -17,34 +16,24 @@ extern "C" {
         strcpy(dst,src);\
     }
 
-
-typedef struct string {
-	char *ptr;
+typedef struct _influxdb_string {
+	char *str;
 	size_t len;
-}s_influxdb_string;
+}influxdb_string_s;
 
-typedef struct influxdb_client {
-    char *schema;
-    char *host;
-    char *uname;
-    char *password;
-    char *dbname;
-    char ssl;
-} s_influxdb_client;
+typedef struct _influxdb_client {
+	char schema[8];
+	char host[16];
+	char username[32];
+	char password[32];
+	char dbname[32];
+	char ssl;
+}influxdb_client_s;
 
+influxdb_client_s *influxdb_client_new(char *host, char *username, char *password, char *dbname, char ssl);
 char *influxdb_strdup(const char *s);
 void init_string(s_influxdb_string *s);
-
-s_influxdb_client *influxdb_client_new(
-	char *host,
-	char *uname,
-	char *password,
-	char *dbname,
-	char ssl
-);
-
 void influxdb_client_free(s_influxdb_client *client);
-
 size_t writefunc(void *ptr,size_t size,size_t nmemb,s_influxdb_string *s);
 int get_response_body(char* url,s_influxdb_string *outstr);
 int influxdb_client_get(s_influxdb_client *client,char *path,char **res);

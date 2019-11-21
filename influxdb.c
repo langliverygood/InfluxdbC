@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
+#include <curl/curl.h>
 
 #include "influxdb.h"
 
@@ -75,48 +76,31 @@ s_influxdb_client *influxdb_client_new(char *host,char *uname,char *password,cha
     return client;
 }
 
-int influxdb_client_get_url_with_credential(
-	s_influxdb_client *client,
-	char (*buffer)[],
-	size_t size,
-	char *path,
-	char *uname,
-	char *password)
+int	influxdb_client_get_url(influxdb_client_s *client, char (*buffer)[], size_t size, char *path, char login)
 {
-    char *uname_enc = curl_easy_escape(NULL, uname, 0);
-    char *password_enc = curl_easy_escape(NULL, password, 0);
+    char *uname_enc, *password_enc;
 
+    uname_enc = curl_easy_escape(NULL, username, 0);
+    password_enc = curl_easy_escape(NULL, password, 0);
     (*buffer)[0] = '\0';
     strncat(*buffer, client->schema, size);
     strncat(*buffer, "://", size);
     strncat(*buffer, client->host, size);
     strncat(*buffer, path, size);
-/*
-    if (strchr(path, '?'))
-        strncat(*buffer, "&", size);
-    else
-        strncat(*buffer, "?", size);
 
-    strncat(*buffer, "u=", size);
-    strncat(*buffer, uname_enc, size);
-    strncat(*buffer, "&p=", size);
-    strncat(*buffer, password_enc, size);
-*/
+	/* 如果需要登录，则加上账号和密码 */
+	if(login != WITHOUT_LOGIN)
+	{
+	    strncat(*buffer, "?u=", size);
+	    strncat(*buffer, uname_enc, size);
+	    strncat(*buffer, "&p=", size);
+	    strncat(*buffer, password_enc, size);
+	}
     free(uname_enc);
     free(password_enc);
 
     return strlen(*buffer);
-}
 
-int	influxdb_client_get_url(
-	s_influxdb_client *client,
-	char (*buffer)[],
-	size_t size,
-	char *path)
-{
-    return influxdb_client_get_url_with_credential(client, buffer, size, path,
-                                                   client->uname,
-                                                   client->password);
 }
 
 size_t influxdb_client_write_data(
@@ -135,7 +119,7 @@ size_t influxdb_client_write_data(
     return realsize;
 }
 
-int influxdb_client_curl(char *url,char *reqtype,char *body,char **response)
+int influxdb_client_curl(char *url, char *reqtype,char *body,char **response)
 {
     CURLcode c;
     CURL *handle = curl_easy_init();
@@ -218,13 +202,13 @@ int influxdb_client_get(s_influxdb_client *client,char *path,char **res)
     return status;
 }
 
-int influxdb_client_post(s_influxdb_client *client,char *path,char *body,char **res)
+int influxdb_client_post(influxdb_client_s *client, char *path, char *body, char **res, char login)
 {
     int status;
-    char url[INFLUXDB_URL_MAX_SIZE];
-    char *buffer = calloc(1, sizeof (char));
+    char url[INFLUXDB_URL_MAX_LEN];
+    char buffer = calloc(1, sizeof (char));
 
-    influxdb_client_get_url(client, &url, INFLUXDB_URL_MAX_SIZE, path);
+    influxdb_client_get_url(client, &url, sizeof(url), path, login);
 
     status = influxdb_client_curl(url, NULL, body, &buffer);
 
@@ -248,13 +232,15 @@ void influxdb_client_free(s_influxdb_client *client)
     }
 }
 
-int influxdb_create_database(s_influxdb_client *client, char *dbname)
+int influxdb_create_database(influxdb_client_s *client, char *dbname, char login)
 {
-    int c;
-	char buf[1024]={0};
-	sprintf(buf,"q=CREATE DATABASE %s",dbname);
-    c = influxdb_client_post(client, "/query",buf, NULL);
-    return c;
+    int ret;
+	char buf[1024];
+	
+	sprintf(buf, "q=CREATE DATABASE %s", dbname);
+    ret = influxdb_client_post(client, "/query", buf, NULL, login);
+	
+    return ret;
 }
 
 int influxdb_delete_database(s_influxdb_client *client, char *dbname)
