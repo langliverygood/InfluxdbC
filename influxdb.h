@@ -5,9 +5,12 @@
 extern "C" {
 #endif
 
+#define YES                  1
+#define NO                   0
+#define IS_DEBUG             NO
 #define INFLUXDB_URL_MAX_LEN 4096
-#define WITHOUT_LOGIN 0
-#define WITH_LOGIN 1
+#define WITHOUT_LOGIN        0
+#define WITH_LOGIN           1
 
 typedef struct _influxdb_string {
 	char *str;
