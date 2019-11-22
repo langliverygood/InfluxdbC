@@ -4,84 +4,12 @@
 
 #include "influxdb.h"
 
-char *influxdb_strdup(const char *s)
-{
-    char *d;
-
-    if (s == NULL)
-        return NULL;
-
-    d = malloc(sizeof (char) * (strlen(s) + 1));
-    if (d == NULL)
-        return NULL;
-
-    strcpy(d, s);
-    return d;
-}
-
-void init_string(s_influxdb_string *s) 
-{
-	s->len = 0;
-	s->ptr = (char*)malloc(s->len+1);
-	if (s->ptr == NULL) 
-	{
-		fprintf(stderr, "malloc() failed\n");
-		exit(EXIT_FAILURE);
-	}
-	s->ptr[0] = '\0';
-}
-
-size_t append_string(s_influxdb_string *s,char* append)
-{
-	size_t new_len = s->len;	
-	if(append)
-	{
-		new_len = s->len + strlen(append);
-		s->ptr = (char*)realloc(s->ptr,new_len+1);
-		if(s->ptr == NULL)		
-		{
-			fprintf(stderr, "realloc() failed\n");
-			new_len = 0;
-		}	
-		else
-		{
-			memcpy(s->ptr+s->len,append,strlen(append));
-			s->ptr[new_len] = '\0';
-			s->len = new_len;	
-		}
-	}
-	return new_len;	
-}
-
-s_influxdb_client *influxdb_client_new(char *host,char *uname,char *password,char *dbname,char ssl)
-{
-    s_influxdb_client *client = malloc(sizeof (s_influxdb_client));
-
-	if (!uname) uname = "";
-	if (!password) password = "";
-	if (!dbname)
-	{
-		free(client);
-		client=NULL;
-	}
-	else 
-	{
-    	client->schema = ssl ? "https" : "http";
-    	client->host = influxdb_strdup(host);
-    	client->uname = influxdb_strdup(uname);
-    	client->password = influxdb_strdup(password);
-    	client->dbname = curl_easy_escape(NULL, dbname, 0);
-    	client->ssl = ssl;
-	}
-    return client;
-}
-
-int	influxdb_client_get_url(influxdb_client_s *client, char (*buffer)[], size_t size, char *path, char login)
+static int	influxdb_client_get_url(influxdb_client_s *client, char (*buffer)[], int size, char *path, char login)
 {
     char *uname_enc, *password_enc;
 
-    uname_enc = curl_easy_escape(NULL, username, 0);
-    password_enc = curl_easy_escape(NULL, password, 0);
+    uname_enc = curl_easy_escape(NULL, client->username, 0);
+    password_enc = curl_easy_escape(NULL, client->password, 0);
     (*buffer)[0] = '\0';
     strncat(*buffer, client->schema, size);
     strncat(*buffer, "://", size);
@@ -91,7 +19,14 @@ int	influxdb_client_get_url(influxdb_client_s *client, char (*buffer)[], size_t 
 	/* 如果需要登录，则加上账号和密码 */
 	if(login != WITHOUT_LOGIN)
 	{
-	    strncat(*buffer, "?u=", size);
+		if(strchr(*buffer, '?') == NULL)
+		{
+			strncat(*buffer, "?u=", size);
+		}
+	    else
+	    {
+			strncat(*buffer, "&u=", size);
+	    }
 	    strncat(*buffer, uname_enc, size);
 	    strncat(*buffer, "&p=", size);
 	    strncat(*buffer, password_enc, size);
@@ -99,97 +34,123 @@ int	influxdb_client_get_url(influxdb_client_s *client, char (*buffer)[], size_t 
     free(uname_enc);
     free(password_enc);
 
+	printf("SQL:%s\n", *buffer);
+
     return strlen(*buffer);
 
 }
 
-size_t influxdb_client_write_data(
-	char *buf,
-	size_t size,
-	size_t nmemb,
-	void *userdata)
+static int influxdb_client_write_data(char *buf, int size, int nmemb, void *userdata)
 {
-    size_t realsize = size * nmemb;
+	char **buffer;
+    int realsize;
+	
+	realsize = size * nmemb;
     if (userdata != NULL)
     {
-        char **buffer = userdata;
+        buffer = userdata;
         *buffer = realloc(*buffer, strlen(*buffer) + realsize + 1);
         strncat(*buffer, buf, realsize);
     }
     return realsize;
 }
 
-int influxdb_client_curl(char *url, char *reqtype,char *body,char **response)
+static int influxdb_client_curl(char *url, char *reqtype, char *body, char **response)
 {
+	long status_code;
     CURLcode c;
-    CURL *handle = curl_easy_init();
+    CURL *handle;
 
+	handle = curl_easy_init();
     if (reqtype != NULL)
-        curl_easy_setopt(handle, CURLOPT_CUSTOMREQUEST, reqtype);
-    curl_easy_setopt(handle, CURLOPT_URL, url);
-    curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION,
-                     influxdb_client_write_data);
-    curl_easy_setopt(handle, CURLOPT_WRITEDATA, response);
-    if (body != NULL)
-        curl_easy_setopt(handle, CURLOPT_POSTFIELDS,
-                         body);
-
-    c = curl_easy_perform(handle);
-
-    if (c == CURLE_OK)
     {
-        long status_code = 0;
-        if (curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE,
-                              &status_code) == CURLE_OK)
-            c = status_code;
+		/* 来设置自定义的请求方式，libcurl默认以GET方式提交请求。*/
+        curl_easy_setopt(handle, CURLOPT_CUSTOMREQUEST, reqtype);
+    }
+    curl_easy_setopt(handle, CURLOPT_URL, url); /* 设置URL */
+    curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, influxdb_client_write_data); /* 设置写数据的函数 */
+    curl_easy_setopt(handle, CURLOPT_WRITEDATA, response); /* 设置写数据的变量 */
+    if (body != NULL)
+    {
+        curl_easy_setopt(handle, CURLOPT_POSTFIELDS, body);
     }
 
+    c = curl_easy_perform(handle);
+    if (c == CURLE_OK)
+    {
+        status_code = 0;
+        if (curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &status_code) == CURLE_OK)
+        {
+            c = status_code;
+        }
+    }
     curl_easy_cleanup(handle);
+	
     return c;
 }
 
-size_t writefunc(void *ptr,size_t size,size_t nmemb,s_influxdb_string *s)
+/* 初始化字符串结构 */
+static void init_string(influxdb_string_s *s) 
 {
-	size_t new_len = s->len + size*nmemb;
-	s->ptr = (char*)realloc(s->ptr, new_len+1);
-	if (s->ptr == NULL) 
+	s->len = 0;
+	s->str = (char*)malloc(s->len + 1);
+	if (s->str == NULL) 
+	{
+		fprintf(stderr, "malloc() failed\n");
+		exit(EXIT_FAILURE);
+	}
+	s->str[0] = '\0';
+
+	return;
+}
+
+/* get_response_body 的写数据函数 */
+static int writedate_repose(void *ptr, int size, int nmemb, void *userdata)
+{
+	int new_len;
+	influxdb_string_s *outstr;
+
+	outstr = (influxdb_string_s *)userdata;
+	new_len = outstr->len + size * nmemb;
+	outstr->str = (char*)realloc(outstr->str, new_len + 1);
+	if (outstr->str == NULL) 
 	{
 		fprintf(stderr, "realloc() failed\n");
 		exit(EXIT_FAILURE);
 	}
-	memcpy(s->ptr+s->len, ptr, size*nmemb);
-	s->ptr[new_len] = '\0';
-	s->len = new_len;
-	return size*nmemb;
+	memcpy(outstr->str + outstr->len, ptr, size * nmemb);
+	outstr->str[new_len] = '\0';
+	outstr->len = new_len;
+	
+	return size * nmemb;
 }
 
-int get_response_body(char* url,s_influxdb_string *outstr)
+/* 供influxdb_query使用，查询结果以json串格式返回到outstr中 */
+static int get_response_body(char* url, influxdb_string_s *outstr)
 {
 	CURL *curl;
-	CURLcode res;
 
 	curl = curl_easy_init();
-	if(curl) 
+	if(curl)
 	{
 		init_string(outstr);
-
-		curl_easy_setopt(curl, CURLOPT_URL,url);
-		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writefunc);
-		curl_easy_setopt(curl, CURLOPT_WRITEDATA,outstr);
-		res = curl_easy_perform(curl);
-		/* always cleanup */
+		curl_easy_setopt(curl, CURLOPT_URL, url);
+		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writedate_repose);
+		curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)outstr);
+		curl_easy_perform(curl);
 		curl_easy_cleanup(curl);
 	}
+	
 	return 0;
 }
-
-int influxdb_client_get(s_influxdb_client *client,char *path,char **res)
+/*
+static int influxdb_client_get(influxdb_client_s *client, char *path, char **res, char login)
 {
     int status;
-    char url[INFLUXDB_URL_MAX_SIZE];
+    char url[INFLUXDB_URL_MAX_LEN];
     char *buffer = calloc(1, sizeof (char));
 
-    influxdb_client_get_url(client, &url, INFLUXDB_URL_MAX_SIZE, path);
+    influxdb_client_get_url(client, &url, INFLUXDB_URL_MAX_LEN, path, login);
 
     status = influxdb_client_curl(url, NULL, NULL, &buffer);
 
@@ -201,37 +162,73 @@ int influxdb_client_get(s_influxdb_client *client,char *path,char **res)
 	//printf("influxdb_client_get , status : %d\n",status);
     return status;
 }
-
-int influxdb_client_post(influxdb_client_s *client, char *path, char *body, char **res, char login)
+*/
+static int influxdb_client_post(influxdb_client_s *client, char *path, char *body, char **res, char login)
 {
     int status;
     char url[INFLUXDB_URL_MAX_LEN];
-    char buffer = calloc(1, sizeof (char));
+    char *buffer = calloc(1, sizeof (char));
 
     influxdb_client_get_url(client, &url, sizeof(url), path, login);
-
     status = influxdb_client_curl(url, NULL, body, &buffer);
-
     if (status >= 200 && status < 300 && res != NULL)
+    {
         *res = buffer; 
-
+    }
     free(buffer);
-	//printf("influxdb_client_post , status : %d\n",status);
+	
     return status;
 }
 
-void influxdb_client_free(s_influxdb_client *client)
+/* 数据库对象初始化 */
+influxdb_client_s *influxdb_client_new(char *host, char *username, char *password, char *dbname, char ssl)
+{
+    influxdb_client_s *client;
+
+	client = malloc(sizeof (influxdb_client_s));
+	if (!username)
+	{
+		username = "";
+	}
+	if (!password)
+	{
+		password = "";
+	}
+	if (!dbname)
+	{
+		free(client);
+		client = NULL;
+	}
+	else 
+	{
+		if(strcmp(client->schema, "ssl") == 0)
+		{
+			sprintf(client->schema, "%s", "https");
+		}
+		else
+		{
+			sprintf(client->schema, "%s", "http");
+		}
+		sprintf(client->host, "%s", host);
+		sprintf(client->username, "%s", username);
+		sprintf(client->password, "%s", password);
+		sprintf(client->dbname, "%s", dbname);
+		client->ssl = ssl;
+	}
+	
+    return client;
+}
+
+/* 数据库对象释放空间 */
+void influxdb_client_free(influxdb_client_s *client)
 {
     if (client)
     {
-        curl_free(client->uname);
-        curl_free(client->password);
-        curl_free(client->dbname);
-        free(client->host);
         free(client);
     }
 }
 
+/* 创建数据库 */
 int influxdb_create_database(influxdb_client_s *client, char *dbname, char login)
 {
     int ret;
@@ -243,59 +240,71 @@ int influxdb_create_database(influxdb_client_s *client, char *dbname, char login
     return ret;
 }
 
-int influxdb_delete_database(s_influxdb_client *client, char *dbname)
+/* 删除数据库 */
+int influxdb_delete_database(influxdb_client_s *client, char *dbname, char login)
 {
-    int c;
-	char buf[1024]={0};
-	sprintf(buf,"q=DROP DATABASE %s",dbname);
-	c = influxdb_client_post(client, "/query",buf, NULL);
-	return c;
+    int ret;
+	char buf[1024];
+	
+	sprintf(buf, "q=DROP DATABASE %s", dbname);
+	ret = influxdb_client_post(client, "/query", buf, NULL, login);
+	
+	return ret;
 }
 
-int influxdb_insert(s_influxdb_client *client,char *query)
+/* 数据库插入数据 */
+int influxdb_insert(influxdb_client_s *client, char *query, char login)
 {
-	int c=-1;
-	char path[INFLUXDB_URL_MAX_SIZE]={0};		
+	int ret;
+	char path[INFLUXDB_URL_MAX_LEN];
+
+	ret = -1;
 	if(client && query)
 	{
-		sprintf(path,"/write?db=%s",client->dbname);	
-		c=influxdb_client_post(client,path,query,NULL);
+		sprintf(path, "/write?db=%s", client->dbname);	
+		ret = influxdb_client_post(client, path, query, NULL, login);
 	}
-	//printf("influxdb_insert ,c = %d\n",c);
-	return c == 204;
+	
+	return ret == 204;
 }
 
-int influxdb_delete(s_influxdb_client *client,char *query)
+/* 数据库删除数据 */
+int influxdb_delete(influxdb_client_s *client, char *query, char login)
 {	
-	int c;	
-	char path[INFLUXDB_URL_MAX_SIZE]={0};
-	char body[INFLUXDB_URL_MAX_SIZE]={0};	
-	sprintf(path,"/query?db=%s",client->dbname);
-	sprintf(body,"q=%s",query);	
-	c = influxdb_client_post(client,path,body,NULL);	
-	return c;
+	int ret;	
+	char path[INFLUXDB_URL_MAX_LEN];
+	char body[INFLUXDB_URL_MAX_LEN];	
+	
+	sprintf(path, "/query?db=%s", client->dbname);
+	sprintf(body, "q=%s", query);	
+	ret = influxdb_client_post(client, path, body, NULL, login);	
+
+	return ret;
 }
 
-int influxdb_query(s_influxdb_client *client,char *query,s_influxdb_string *outstr)
+/* 数据库查询数据 */
+int influxdb_query(influxdb_client_s *client, char *query, influxdb_string_s *outstr, char login)
 {
     int status;
-    char url[INFLUXDB_URL_MAX_SIZE];
-	CURL *curl = curl_easy_init();
-	char path[INFLUXDB_URL_MAX_SIZE]={0};	
-	sprintf(path,"/query?db=%s&q=",client->dbname);
+	char *output;
+    char url[INFLUXDB_URL_MAX_LEN];
+	char path[INFLUXDB_URL_MAX_LEN];
+	CURL *curl;
+
+	curl = curl_easy_init();
+	sprintf(path, "/query?db=%s&q=", client->dbname);
 	if(curl) 
 	{
-		char *output = curl_easy_escape(curl,query,strlen(query));
+		output = curl_easy_escape(curl, query, strlen(query));
 		if(output) 
 		{
-			//printf("Encoded: %s\n", output);
-			strncat(path,output,INFLUXDB_URL_MAX_SIZE);
+			strncat(path, output, INFLUXDB_URL_MAX_LEN);
 			curl_free(output);
 		}
 		curl_easy_cleanup(curl);
 	}	
-    influxdb_client_get_url(client,&url,INFLUXDB_URL_MAX_SIZE,path);    
-	status=get_response_body(url,outstr);	
-	//printf("influxdb_query status : %d\n",status);
+    influxdb_client_get_url(client, &url, INFLUXDB_URL_MAX_LEN, path, login);    
+	status = get_response_body(url, outstr);	
+	
     return status;
 }
