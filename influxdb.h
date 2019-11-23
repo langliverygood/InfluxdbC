@@ -19,7 +19,7 @@ typedef struct _influxdb_string {
 
 typedef struct _influxdb_client {
 	char schema[8];
-	char host[16];
+	char host[32];
 	char username[32];
 	char password[32];
 	char dbname[32];

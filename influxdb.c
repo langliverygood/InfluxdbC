@@ -188,10 +188,10 @@ influxdb_client_s *influxdb_client_new(char *host, char *username, char *passwor
 	}
 	else 
 	{
-		if(strcmp(client->schema, "ssl") == 0)
-		{
-			sprintf(client->schema, "%s", "https");
-		}
+        if(ssl != 0)
+        {
+            sprintf(client->schema, "%s", "https");
+        }
 		else
 		{
 			sprintf(client->schema, "%s", "http");
